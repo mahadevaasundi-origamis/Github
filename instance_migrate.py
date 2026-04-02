@@ -30,15 +30,6 @@ def get_remote_branches(remote_url):
     return branches
 
 
-def get_local_branches():
-    """Returns a set of branch names in the current mirror clone."""
-    result = subprocess.run(
-        ["git", "for-each-ref", "--format=%(refname:short)", "refs/heads/"],
-        capture_output=True, text=True, check=True
-    )
-    return set(result.stdout.strip().splitlines())
-
-
 def get_remote_tags(remote_url):
     """Returns a set of tag names that exist on the remote destination."""
     result = subprocess.run(
@@ -49,7 +40,6 @@ def get_remote_tags(remote_url):
     for line in result.stdout.strip().splitlines():
         if "\t" in line:
             ref = line.split("\t")[1]
-            # Skip peeled tag refs (ending with ^{})
             if not ref.endswith("^{}"):
                 tag = ref.replace("refs/tags/", "")
                 tags.add(tag)
@@ -65,10 +55,20 @@ def get_local_tags():
     return set(result.stdout.strip().splitlines())
 
 
-def migrate_repo(source_url, dest_url, temp_dir="temp_migration"):
+def get_local_branches():
+    """Returns a set of all branch names in the current mirror clone."""
+    result = subprocess.run(
+        ["git", "for-each-ref", "--format=%(refname:short)", "refs/heads/"],
+        capture_output=True, text=True, check=True
+    )
+    return set(result.stdout.strip().splitlines())
+
+
+def migrate_repo(source_url, dest_url, branches_to_migrate, temp_dir="temp_migration"):
     """
-    Clones a repo from source with --mirror and pushes only NEW branches + tags
-    to destination. Skips branches and tags that already exist on the destination.
+    Clones a repo from source with --mirror and pushes only the specified
+    branches (+ all new tags) to the destination.
+    Skips branches that already exist on the destination.
     """
     abs_temp_dir = os.path.abspath(temp_dir)
     original_dir = os.getcwd()
@@ -78,6 +78,7 @@ def migrate_repo(source_url, dest_url, temp_dir="temp_migration"):
         safe_rmtree(abs_temp_dir)
 
         print(f"--- Starting migration for: {source_url} ---")
+        print(f"--- Branches requested: {len(branches_to_migrate)} ---")
 
         # 2. Mirror clone from source
         print("\nCloning from source...")
@@ -88,18 +89,29 @@ def migrate_repo(source_url, dest_url, temp_dir="temp_migration"):
 
         os.chdir(abs_temp_dir)
 
-        # 3. Fetch all standard refs explicitly
+        # 3. Fetch all refs
         print("Fetching all refs...")
         subprocess.run(["git", "fetch", "--all"], check=True)
 
+        # ── VALIDATE requested branches exist in source ───────────────────────
+
+        local_branches = get_local_branches()
+        invalid_branches = [b for b in branches_to_migrate if b not in local_branches]
+
+        if invalid_branches:
+            print(f"\n✗ The following requested branches were NOT found in source — please check spelling:")
+            for b in invalid_branches:
+                print(f"     - {b}")
+            print("\nAborting migration. Fix the branch list and retry.")
+            return
+
         # ── BRANCHES ──────────────────────────────────────────────────────────
 
-        print("\nChecking branches...")
-        local_branches = get_local_branches()
+        print("\nChecking branches against destination...")
         remote_branches = get_remote_branches(dest_url)
 
-        new_branches = local_branches - remote_branches
-        skipped_branches = local_branches & remote_branches
+        new_branches     = [b for b in branches_to_migrate if b not in remote_branches]
+        skipped_branches = [b for b in branches_to_migrate if b in remote_branches]
 
         if skipped_branches:
             print(f"⚠  Skipping {len(skipped_branches)} branch(es) already on destination:")
@@ -122,10 +134,10 @@ def migrate_repo(source_url, dest_url, temp_dir="temp_migration"):
         # ── TAGS ──────────────────────────────────────────────────────────────
 
         print("\nChecking tags...")
-        local_tags = get_local_tags()
+        local_tags  = get_local_tags()
         remote_tags = get_remote_tags(dest_url)
 
-        new_tags = local_tags - remote_tags
+        new_tags     = local_tags - remote_tags
         skipped_tags = local_tags & remote_tags
 
         if skipped_tags:
@@ -163,7 +175,12 @@ def migrate_repo(source_url, dest_url, temp_dir="temp_migration"):
 
 
 if __name__ == "__main__":
-    SOURCE = "https://github.com/OrigamisAI/DocuAgent.git"
-    DESTINATION = "https://repos.nusummituat.com/data-and-ai/ai/docuagent.git"
+    SOURCE      = "https://github.com/OrigamisAI/Bandhan_Bot.git"
+    DESTINATION = "https://repos.nusummituat.com/data-and-ai/ai/mmcompliance.git"
 
-    migrate_repo(SOURCE, DESTINATION)
+    # ✏️  Add or remove branches here as needed
+    BRANCHES_TO_MIGRATE = [
+        "dev_mmc", "mobileresponsive_mmc_amit", "bulkupload_mmc_amit"
+            ]
+
+    migrate_repo(SOURCE, DESTINATION, BRANCHES_TO_MIGRATE)
